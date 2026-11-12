@@ -1,0 +1,11 @@
+{
+  "checksum_check": "verificato con checksum ufficiale Commissione (sha1)",
+  "retrieved_at_utc": "2026-11-12T14:27:14Z",
+  "source": "European Commission \u2013 Financial Sanctions Files (FSF)",
+  "generation_date": "2026-10-23T17:05:43.888+02:00",
+  "global_file_id": "185833",
+  "xml_sha256": "636800c3e494b2ef8934f51f5e23c914a6208a383ac850e674b1b35a7d49d34f",
+  "csv_sha256": "22b52ee658d4935ba87e0073d716c4cee0a9f045086e43525e4b5a69a6bcf88d",
+  "xml_bytes": 25899600,
+  "csv_bytes": 25288456
+}
