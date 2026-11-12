@@ -1,0 +1,88 @@
+# GitHub Actions workflow – Mirror giornaliero della lista consolidata UE (FSF)
+# Percorso nel repository: .github/workflows/eu-fsf-mirror.yml
+# Prerequisiti: Settings > Secrets and variables > Actions > New repository secret
+#   FSF_XML_URL = URL "crawler/robot" del file XML 1.1 (da FSF, sezione Files > show settings for crawler/robot)
+#   FSF_CSV_URL = URL "crawler/robot" del file CSV 1.1
+#   FSF_XML_CHECKSUM_URL = URL "Checksum" del file XML 1.1 (consigliato: verifica di integrità)
+# Il repository contiene SOLO dati pubblici della Commissione UE. Nessun dato COIMA.
+# Codice da validare da parte di IT prima dell'attivazione.
+
+name: EU FSF mirror
+
+on:
+  schedule:
+    - cron: "0 5 * * *"      # ogni giorno alle 05:00 UTC
+  workflow_dispatch: {}       # avvio manuale
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download FSF files
+        env:
+          FSF_XML_URL: ${{ secrets.FSF_XML_URL }}
+          FSF_CSV_URL: ${{ secrets.FSF_CSV_URL }}
+          FSF_XML_CHECKSUM_URL: ${{ secrets.FSF_XML_CHECKSUM_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p data tmp
+          curl -fsSL --retry 3 -o tmp/fsf.xml "$FSF_XML_URL"
+          curl -fsSL --retry 3 -o tmp/fsf.csv "$FSF_CSV_URL"
+          if [ -n "${FSF_XML_CHECKSUM_URL:-}" ]; then
+            curl -fsSL --retry 3 -o tmp/fsf.xml.checksum "$FSF_XML_CHECKSUM_URL"
+          fi
+
+      - name: Validate and write metadata
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import hashlib, json, os, sys, datetime
+          import xml.etree.ElementTree as ET
+          xml_p, csv_p = "tmp/fsf.xml", "tmp/fsf.csv"
+          for p in (xml_p, csv_p):
+              if os.path.getsize(p) < 1_000_000:
+                  sys.exit(f"File troppo piccolo, download probabilmente fallito: {p}")
+          root = ET.parse(xml_p).getroot()          # verifica che l'XML sia ben formato
+          checksum_status = "non verificato (secret FSF_XML_CHECKSUM_URL assente)"
+          if os.path.exists("tmp/fsf.xml.checksum"):
+              official = open("tmp/fsf.xml.checksum", encoding="utf-8", errors="ignore").read().strip().lower()
+              data = open(xml_p, "rb").read()
+              computed = {a: hashlib.new(a, data).hexdigest() for a in ("md5", "sha1", "sha256", "sha512")}
+              match = [a for a, h in computed.items() if h in official]
+              if not match:
+                  sys.exit(f"Checksum ufficiale non corrispondente: {official[:200]}")
+              checksum_status = f"verificato con checksum ufficiale Commissione ({match[0]})"
+          meta = {
+              "checksum_check": checksum_status,
+              "retrieved_at_utc": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "source": "European Commission – Financial Sanctions Files (FSF)",
+              "generation_date": root.attrib.get("generationDate"),
+              "global_file_id": root.attrib.get("globalFileId"),
+              "xml_sha256": hashlib.sha256(open(xml_p, "rb").read()).hexdigest(),
+              "csv_sha256": hashlib.sha256(open(csv_p, "rb").read()).hexdigest(),
+              "xml_bytes": os.path.getsize(xml_p),
+              "csv_bytes": os.path.getsize(csv_p),
+          }
+          json.dump(meta, open("tmp/metadata.json", "w"), indent=2)
+          print(json.dumps(meta, indent=2))
+          EOF
+          mv tmp/fsf.xml data/fsf.xml
+          mv tmp/fsf.csv data/fsf.csv
+          mv tmp/metadata.json data/metadata.json
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "fsf-mirror-bot"
+          git config user.email "fsf-mirror-bot@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet -- data/fsf.xml data/fsf.csv; then
+            echo "Nessuna nuova pubblicazione FSF."
+          else
+            git commit -m "FSF update $(date -u +%Y-%m-%d)"
+            git push
+          fi
